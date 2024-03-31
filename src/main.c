@@ -20,19 +20,49 @@
     with this program; if not, write to the Free Software Foundation, Inc.,
     51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  * 
- * CONTROLLER: PIC16F648A
- * 
- * Matrix Keypad 0 to 15 press, update only when pressed for 4 x 4 matrix.
- * Button press will signal an interrupt, ack will clear interrupt. 
- * Uses internal oscillator, and pin change interrupt on port b 7:4. 
- * 
- * RA0 to 3 = Keypad value
- * RA4      = Ack input
- * RA5      = Active Low enable
- * RA6      = Active High Enable
- * RA7      = Interrupt Output
+
  */
 
+/*******************************************************************************
+ * @file    main.c
+ * @author  Jay Convertino(electrobs@gmail.com)
+ * @date    2014.11.06
+ * @brief   Matrix Keypad for PIC uC
+ *
+ * CONTROLLER: PIC16F648A
+ *
+ * Matrix Keypad 0 to 15 press, update only when pressed for 4 x 4 matrix.
+ * Button press will signal an interrupt, ack will clear interrupt.
+ * Uses internal oscillator, and pin change interrupt on port b 7:4.
+ *
+ * RA0 to 3 = Keypad value
+ * RA4      = Ack input
+ * RA5      = unused
+ * RA6      = unused
+ * RA7      = Interrupt Output
+ *
+ * @license mit
+ *
+ * Copyright 2024 Johnathan Convertino
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ ******************************************************************************/
 
 #include <xc.h>
 #include <stdint.h>
@@ -41,12 +71,11 @@
 //other defines, debounce time is in milliseconds
 #define DEBOUNCE_TIME   50
 #define ACK_BIT         4
-#define ACT_LOW_BIT     5
-#define ACT_HIGH_BIT    6
 #define IRQ_BIT         7
 #define FLG_OFF         0
 #define FLG_ON          1
-//port state decoding
+#define ENA_IRQ         1
+//port state decoding normally open switch
 #define ROW0_COL0       0b11101110
 #define ROW0_COL1       0b11101101
 #define ROW0_COL2       0b11101011
@@ -136,14 +165,14 @@ void main(void)
     PORTB = 0;
     
     //enable Port B 7:4 interrupt
-    PIN_CHANGE_ENA = FLG_ON;
+    PIN_CHANGE_ENA = ENA_IRQ;
     
     //enable General Interrupt
     ei();
     
     for(;;)
     {
-        if((PORTA & (1 << ACK_BIT)) && (PORTA & (1 << ACT_HIGH_BIT)) && (~PORTA & (1 << ACT_LOW_BIT)))
+        if(PORTA & (1 << ACK_BIT))
         {
             g_portaBuffer &= __irq_bit_off;
             PORTA = g_portaBuffer;
@@ -154,12 +183,13 @@ void main(void)
 //handles all interrupts, but is setup for portb pin interrupt only
 void interrupt PORTB_Handler(void)
 {
-    //check for correct interrupt, and enabled (RA5 active low)
+    uint8_t prev_portaBuffer = 0;
+    //check for correct interrupt, is it enabled, and is the flag correct?
     if(PIN_CHANGE_ENA && PIN_CHANGE_FLG)
     {
         __delay_ms(DEBOUNCE_TIME);
         //only check for button if a column bit is high(actually low, ~ = cleaner logic) and IRQ bit is low
-        if((~PORTB & 0xF0) && (~g_portaBuffer & (1 << IRQ_BIT)) && (PORTA & (1 << ACT_HIGH_BIT)) && (~PORTA & (1 << ACT_LOW_BIT)))
+        if((~PORTB & 0xF0) && (~g_portaBuffer & (1 << IRQ_BIT)))
         {
             //buffer for portb
             uint8_t tempPortb = 0;
@@ -181,6 +211,8 @@ void interrupt PORTB_Handler(void)
             
             //set outputs to 0
             PORTB = 0;
+            
+            prev_portaBuffer = g_portaBuffer;
             
             //decode byte of information to a number 0 to 15
             switch(tempPortb)
@@ -234,16 +266,17 @@ void interrupt PORTB_Handler(void)
                     g_portaBuffer = V_ROW3_COL3;
                     break;
                 default:
-                    g_portaBuffer = 0;
+                    //if an invalid press is made, just output last press again.
+                    g_portaBuffer = prev_portaBuffer;
                     break;
             }
-            
-            //turn on irq
+            //turn on irq output bit
             g_portaBuffer |= __irq_bit_on;
             
             //pass buffer to output port a
             PORTA = g_portaBuffer;
         }
+        //clear irq flag
         PIN_CHANGE_FLG = FLG_OFF;
     }
 }
